@@ -35,7 +35,7 @@ bmap=$1".bmap"
 bootsize=30
 MIN_PARTITION_FREE_SIZE=256 
 #ROOTFSPATH=<Path_to_your_ROOTFS_folder>
-ROOTFSPATH=~/BB
+ROOTFSPATH=~/Lubuntu15.10-rootfs
 
 #-------------------------------
 echo "Creating Roseapple Pi SDCard Image ..."
@@ -77,7 +77,7 @@ parted -s ${device} unit s print
 
 losetup -d ${device}
 
-deviceloop=`kpartx -av ${image} | sed -E 's/.*(loop[0-9])p.*/\1/g' | head -1`
+deviceloop=`kpartx -asv ${image} | sed -E 's/.*(loop[0-9])p.*/\1/g' | head -1`
 devicemap="/dev/mapper/${deviceloop}"
 
 bootp=${devicemap}p1
