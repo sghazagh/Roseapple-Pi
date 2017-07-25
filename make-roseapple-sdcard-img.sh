@@ -1,7 +1,7 @@
 #!/bin/sh
 ###########################################################################################################
-# Roseapple Pi SD Card Image Tool
-# Copyright (C) 2015 Saeid Ghazagh <sghazagh@elar-systems.com>
+# ASUS Tinker Board SD Card Image Tool
+# Copyright (C) 2017 Saeid Ghazagh <sghazagh@elar-systems.com>
 #
 # http://www.elar-systems.com
 # http://www.elar-systems.com.au
@@ -20,6 +20,11 @@
 #    See "###### Build the image file ######" sction to adjust SD Card sizes as per your requirement     #
 ##########################################################################################################
 
+# Make sure only root can run our script
+if [[ $EUID -ne 0 ]]; then
+   echo "This script must be run as root" 1>&2
+   exit 1
+fi
 
 if [ -z "$1" ]
   then
@@ -33,13 +38,16 @@ bmap=$1".bmap"
 
 ###### Build the image file ######
 bootsize=30
-MIN_PARTITION_FREE_SIZE=256 
-#ROOTFSPATH=<Path_to_your_ROOTFS_folder>
-ROOTFSPATH=~/Lubuntu15.10-rootfs
+MIN_PARTITION_FREE_SIZE=256
+BOOT_PART_START=8192
+ROOT_PART_START=$(($bootsize*1024*1024/512+$BOOT_PART_START))
 
+#ROOTFSPATH=<Path_to_your_ROOTFS_folder>
+#ROOTFSPATH=~/rootfs/Lubuntu16.04.2
+ROOTFSPATH=~/rootfs/Ubuntu16.04.2-LXQt
 #-------------------------------
-echo "Creating Roseapple Pi SDCard Image ..."
-echo "=======================================" 
+echo "Creating Tinker Board SD Card Image ..."
+echo "========================================" 
 
 NUMBER_OF_FILES=`sudo find ${ROOTFSPATH} | wc -l`
 EXT_SIZE=`sudo du -DsB1 ${ROOTFSPATH} | awk -v min=$MIN_PARTITION_FREE_SIZE -v f=${NUMBER_OF_FILES} \
@@ -48,51 +56,51 @@ EXT_SIZE=`sudo du -DsB1 ${ROOTFSPATH} | awk -v min=$MIN_PARTITION_FREE_SIZE -v f
 echo "rootfs -->" ${ROOTFSPATH}
 echo "Number of files -->" ${NUMBER_OF_FILES}
 
-BOOT_START_SECTOR=16384
-BOOT_END_SECTOR=$(($BOOT_START_SECTOR + ($bootsize * 1024 * 1024 / 512)))
-echo "Size of Partition 1 -->" $bootsize"M"
-#echo "   -> Start Sector: " $BOOT_START_SECTOR
-#echo "   -> End Sector  : " $BOOT_END_SECTOR
-
-ROOT_START_SECTOR=$(($BOOT_END_SECTOR + 1))
-ROOT_END_SECTOR=-1
+BOOT_SIZE=$bootsize"M"
+echo "Size of Partition 1 -->" $BOOT_SIZE
 echo "Size of Partition 2 -->" ${EXT_SIZE}"M"
-#echo "   -> Start Sector: " $ROOT_START_SECTOR
-#echo "   -> End Sector  : " $ROOT_END_SECTOR 
 
 SD_SIZE=$(($bootsize + $EXT_SIZE))
 echo "Total Size of SD Card Image -->" $SD_SIZE"M"
 
 sleep 5
 
-dd if=/dev/zero of=$image bs=1MB count=${SD_SIZE}
+dd if=/dev/zero of=$image bs=1M count=${SD_SIZE}
+
 device=`losetup -f --show $image`
 echo "Image $image created and mounted as $device ..."
 
-parted -s ${device} mklabel gpt
-parted -s ${device} unit s mkpart primary ${BOOT_START_SECTOR} ${BOOT_END_SECTOR}
-parted $device unit s mkpart primary ${ROOT_START_SECTOR} -- ${ROOT_END_SECTOR}
-
-parted -s ${device} unit s print
-
-losetup -d ${device}
-
-deviceloop=`kpartx -asv ${image} | sed -E 's/.*(loop[0-9])p.*/\1/g' | head -1`
-devicemap="/dev/mapper/${deviceloop}"
-
-bootp=${devicemap}p1
-rootp=${devicemap}p2
-
-echo "Formating Partitions..."
-mkfs.vfat -n misc $bootp
-mkfs.ext4 -L system $rootp
-
-echo ${device} "---Writing Bootloader and U-Boot Images..."
+echo "Writing U-Boot to ${device} ..."
 dd if=./hwpack/bootloader/bootloader.bin of=${device} bs=512 seek=4097
 dd if=./hwpack/bootloader/u-boot-dtb.img of=${device} bs=512 seek=6144
 
+fdisk $device << EOF
+n
+p
+1
+$BOOT_PART_START
++$BOOT_SIZE
+t
+c
+n
+p
+2
+$ROOT_PART_START
 
-echo ${bootp} "-Copying Boot Partition Contents..." 
+a
+1
+w
+EOF
+
+losetup -d $device
+device=`kpartx -vsa $image | sed -E 's/.*(loop[0-9])p.*/\1/g' | head -1`
+device="/dev/mapper/${device}"
+echo ${device}
+
+bootp=${device}p1
+rootp=${device}p2
+
+mkfs.vfat -n BOOT $bootp
 mkdir -p /mnt/p1
 mount $bootp /mnt/p1
 #---- Kernel -----------------------------------------------------------------------------
@@ -101,31 +109,25 @@ mount $bootp /mnt/p1
 umount /mnt/p1
 rm -r /mnt/p1
 
+mkfs.ext4 -L rootfs $rootp
 
-echo ${rootp} "-Copying ROOTFS Contents..."
 mkdir -p /mnt/p2
 mount $rootp /mnt/p2
 #-- rootfs -------------------------------------------------------------------------------
-   cp -rpPv ${ROOTFSPATH}/* /mnt/p2/
-
-   cp -rpPv ./hwpack/rootfs/etc/* /mnt/p2/etc/
-   cp -rpPv ./hwpack/rootfs/etc/modprobe.d/* /mnt/p2/etc/modprobe.d/
+   #cp -rpPv ${ROOTFSPATH}/* /mnt/p2/
+   rsync -ah --info=progress2 ${ROOTFSPATH}/* /mnt/p2/
    rm -rf /mnt/p2/lib/modules
-   mkdir -p /mnt/p2/lib/modules
-   cp -rpPv ./hwpack/rootfs/lib/modules/* /mnt/p2/lib/modules/
+   cp -rpPv ./hwpack/rootfs/* /mnt/p2/
    sync
 
 umount /mnt/p2
 rm -r /mnt/p2
 
-sync 
-
 echo "Copy completed ..."
-kpartx -d ${device}
-losetup -d ${device}
 
+kpartx -d $image
 
-bmaptool create -o "$bmap" "$image"
+#bmaptool create -o "$bmap" "$image"
 
 echo "SD Image file $image has been created successfully."
 
